@@ -10,7 +10,7 @@ from __future__ import annotations
 import contextlib
 import sys
 import typing
-from typing import Any
+from typing import Any, Literal
 from typing import Callable
 from typing import cast
 from typing import Iterable
@@ -2447,19 +2447,21 @@ class Connection(ConnectionEventsTarget, inspection.Inspectable["Inspector"]):
 
     def _run_ddl_visitor(
         self,
-        visitorcallable: Type[InvokeDDLBase],
+        phase: Literal["create", "drop"],
         element: SchemaVisitable,
-        **kwargs: Any,
+        **kwargs: Any
     ) -> None:
         """run a DDL visitor.
 
         This method is only here so that the MockConnection can change the
         options given to the visitor so that "checkfirst" is skipped.
-
         """
-        visitorcallable(
-            dialect=self.dialect, connection=self, **kwargs
-        ).traverse_single(element)
+        visitor: type[InvokeDDLBase]
+        if phase == "create":
+            visitor = self.dialect.ddl_generator
+        else:
+            visitor = self.dialect.ddl_dropper
+        return visitor(self, element, **kwargs).invoke()
 
 
 class ExceptionContextImpl(ExceptionContext):
@@ -3245,12 +3247,12 @@ class Engine(
 
     def _run_ddl_visitor(
         self,
-        visitorcallable: Type[InvokeDDLBase],
+        phase: Literal["create", "drop"],
         element: SchemaVisitable,
         **kwargs: Any,
     ) -> None:
         with self.begin() as conn:
-            conn._run_ddl_visitor(visitorcallable, element, **kwargs)
+            conn._run_ddl_visitor(phase, element, **kwargs)
 
     def connect(self) -> Connection:
         """Return a new :class:`_engine.Connection` object.

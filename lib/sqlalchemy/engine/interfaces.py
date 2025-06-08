@@ -61,6 +61,8 @@ if TYPE_CHECKING:
     from ..sql.compiler import InsertmanyvaluesSentinelOpts
     from ..sql.compiler import Linting
     from ..sql.compiler import SQLCompiler
+    from ..sql.ddl import SchemaDropper
+    from ..sql.ddl import SchemaGenerator
     from ..sql.elements import BindParameter
     from ..sql.elements import ClauseElement
     from ..sql.schema import Column
@@ -720,6 +722,20 @@ class Dialect(EventTarget):
 
     ddl_compiler: Type[DDLCompiler]
     """a :class:`.Compiled` class used to compile DDL statements"""
+
+    ddl_generator: ClassVar[Type[SchemaGenerator]]
+    """a :class:`.SchemaGenerator` class used to generate DDL CREATE
+    statements
+
+    .. versionadded:: 2.1
+    """
+
+    ddl_dropper: ClassVar[Type[SchemaDropper]]
+    """a :class:`.SchemaDropper` class used to generate DDL DROP
+    statements
+
+    .. versionadded:: 2.1
+    """
 
     type_compiler_cls: ClassVar[Type[TypeCompiler]]
     """a :class:`.Compiled` class used to compile SQL type objects

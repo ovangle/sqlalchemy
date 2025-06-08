@@ -54,7 +54,6 @@ from .type_api import TypeEngine as TypeEngine
 from .type_api import TypeEngineMixin
 from .type_api import Variant  # noqa
 from .visitors import InternalTraversal
-from .. import event
 from .. import exc
 from .. import inspection
 from .. import util
@@ -73,8 +72,10 @@ if TYPE_CHECKING:
     from ._typing import _TypeEngineArgument
     from .elements import ColumnElement
     from .operators import OperatorType
+    from .schema import Column
     from .schema import MetaData
     from .schema import SchemaConst
+    from .schema import Table
     from .type_api import _BindProcessorType
     from .type_api import _ComparatorFactory
     from .type_api import _LiteralProcessorType
@@ -1049,51 +1050,64 @@ class SchemaType(SchemaEventTarget, TypeEngineMixin):
     _use_schema_map = True
 
     name: Optional[str]
+    schema: Optional[str]
+    metadata: Optional[MetaData]
+    table: Optional[Table]
+    column: Optional[Column[Any]]
 
     def __init__(
         self,
         name: Optional[str] = None,
-        schema: Optional[Union[str, Literal[SchemaConst.BLANK_SCHEMA]]] = None,
+        schema: Optional[str] = None,
         metadata: Optional[MetaData] = None,
         inherit_schema: Union[bool, _NoArg] = NO_ARG,
         quote: Optional[bool] = None,
-        _create_events: bool = True,
+        create_type: bool = True,
         _adapted_from: Optional[SchemaType] = None,
     ):
         if name is not None:
             self.name = quoted_name(name, quote)
         else:
             self.name = None
-        self.schema = schema
-        self.metadata = metadata
-
-        if inherit_schema is True and schema is not None:
-            raise exc.ArgumentError(
-                "Ambiguously setting inherit_schema=True while "
-                "also passing a non-None schema argument"
-            )
         self.inherit_schema = (
             inherit_schema
             if inherit_schema is not NO_ARG
             else (schema is None and metadata is None)
         )
+
+        if (
+            inherit_schema is True
+            and schema is not None
+        ):
+            raise exc.ArgumentError(
+                "Ambiguously setting inherit_schema=True while "
+                "also passing a non-None schema argument"
+            )
+
+        self.create_type = create_type
+        if (
+            _adapted_from is not None
+            and _adapted_from.metadata is metadata
+        ):
+            self.table = _adapted_from.table
+            self.column = _adapted_from.column
+        else:
+            self.table = self.column = None
+
+        if metadata:
+            self._set_metadata(
+                metadata,
+                self.table,
+                self.column,
+                schema
+            )
+        else:
+            self.metadata = None
+            self.schema = schema
+
         # breakpoint()
-        self._create_events = _create_events
-
-        if _create_events and self.metadata:
-            event.listen(
-                self.metadata,
-                "before_create",
-                util.portable_instancemethod(self._on_metadata_create),
-            )
-            event.listen(
-                self.metadata,
-                "after_drop",
-                util.portable_instancemethod(self._on_metadata_drop),
-            )
-
-        if _adapted_from:
-            self.dispatch = self.dispatch._join(_adapted_from.dispatch)
+        #if _adapted_from:
+        #    self.dispatch = self.dispatch._join(_adapted_from.dispatch)
 
     def _set_parent(self, parent, **kw):
         # set parent hook is when this type is associated with a column.
@@ -1109,7 +1123,7 @@ class SchemaType(SchemaEventTarget, TypeEngineMixin):
         # on_table/metadata_create/drop in this method, which is used by
         # "native" types with a separate CREATE/DROP e.g. Postgresql.ENUM
 
-        parent._on_table_attach(util.portable_instancemethod(self._set_table))
+        cast("ColumnElement[Any]", parent)._on_table_attach(self._set_table)
 
     def _variant_mapping_for_set_table(self, column):
         if column.type._variant_mapping:
@@ -1119,64 +1133,109 @@ class SchemaType(SchemaEventTarget, TypeEngineMixin):
             variant_mapping = None
         return variant_mapping
 
-    def _set_table(self, column, table):
-        if self.inherit_schema:
+    @property
+    @util.preload_module('sqlalchemy.sql.schema')
+    def _key(self):
+        _sql_schema = util.preloaded.sql_schema
+        name = self.name if self.name is not None else '<unknown>'
+
+        return (
+            _sql_schema._get_table_key(name, self.schema)
+        )
+
+    def _set_metadata(
+        self,
+        metadata: MetaData,
+        table: Table | None,
+        column: Column[Any] | None,
+        schema: str | None = None
+    ) -> None:
+
+        self.metadata = metadata
+
+        self.schema = schema
+        if schema is None and table is None:
+            self.schema = metadata.schema
+
+        existing = metadata._types.get(self._key, None)
+
+        if (
+            table is not None
+            and self.inherit_schema
+            and self.schema != table.schema
+        ):
+            if existing is not None:
+                # The type either:
+                # - is constructed with explicit metadata and are attaching to
+                #   the first table; or
+                # - is shared by at least two tables on the same metadata
+                #   with `inherit_schema=True` and is inheriting different
+                #   values for the schema from both of them.
+                #
+                # Because of how adaption works, we can't disambiguate between
+                # these cases, but the second seems unlikely.
+                # In the first case, the ideal behaviour is to delete the existing
+                # key and to force a "shared" type. In the second, we would
+                # want to retain (and create DDL for) both types in the schema.
+                # If the second case was used, there would be a spurious type
+                # created in the metadata's schema
+
+                # ie. Case I (preffered)
+                del metadata._types[existing._key]
+                existing = None
+
+                # case II (safer)
+                # metadata._types[existing._key] = cast(
+                #   SchemaType,
+                #   existing.copy()
+                # )
+
             self.schema = table.schema
-        elif self.metadata and self.schema is None and self.metadata.schema:
-            self.schema = self.metadata.schema
 
-        if self.schema is not None:
-            self.inherit_schema = False
-
-        if not self._create_events:
-            return
-
-        variant_mapping = self._variant_mapping_for_set_table(column)
-
-        event.listen(
-            table,
-            "before_create",
-            util.portable_instancemethod(
-                self._on_table_create, {"variant_mapping": variant_mapping}
-            ),
-        )
-        event.listen(
-            table,
-            "after_drop",
-            util.portable_instancemethod(
-                self._on_table_drop, {"variant_mapping": variant_mapping}
-            ),
-        )
-        if self.metadata is None:
-            # if SchemaType were created w/ a metadata argument, these
-            # events would already have been associated with that metadata
-            # and would preclude an association with table.metadata
-            event.listen(
-                table.metadata,
-                "before_create",
-                util.portable_instancemethod(
-                    self._on_metadata_create,
-                    {"variant_mapping": variant_mapping},
-                ),
+        if existing is None:
+            metadata._types[self._key] = self
+        elif (
+            table is not None
+            and existing.table is not None
+            and existing.table is not table
+        ):
+            # This type is shared between multiple tables.
+            # Replace the registered type with a copy with
+            # no table or column information, to indicate that
+            # it is a shared, metadata-level type.
+            metadata._types[self._key] = cast(
+                SchemaType,
+                self.copy(_adapted_from=None)
             )
-            event.listen(
-                table.metadata,
-                "after_drop",
-                util.portable_instancemethod(
-                    self._on_metadata_drop,
-                    {"variant_mapping": variant_mapping},
-                ),
-            )
+
+    def _set_table(self, column, table):
+        if not self.metadata:
+            # If metadata was initialised before the type was attached
+            # to a table, then the type should always be considered
+            # a "shared" type.
+            self.table = table
+            self.column = column
+
+        self._set_metadata(table.metadata, table, column, self.schema)
 
     def copy(self, **kw):
+        if (
+            '_to_metadata' in kw
+            and kw.get('schema', self.schema) != self.schema
+            and not self.inherit_schema
+        ):
+            # This copy is happening because the table we are attached to
+            # is being copied using Table.to_metadata. If there is
+            # an explicit `schema`, it is the schema of the table which we
+            # are being copied to.
+            # Only use that value if we are inheriting the table schema.
+            kw['schema'] = None
+        kw.update(
+            metadata=kw.pop('_to_metadata', self.metadata),
+        )
         return self.adapt(
             cast("Type[TypeEngine[Any]]", self.__class__),
-            _create_events=True,
-            metadata=(
-                kw.get("_to_metadata", self.metadata)
-                if self.metadata is not None
-                else None
-            ),
+            **kw
         )
 
     @overload
@@ -1190,63 +1249,18 @@ class SchemaType(SchemaEventTarget, TypeEngineMixin):
     def adapt(
         self, cls: Type[Union[TypeEngine[Any], TypeEngineMixin]], **kw: Any
     ) -> TypeEngine[Any]:
-        kw.setdefault("_create_events", False)
+        if kw.get('schema') != self.schema:
+            kw['inherit_schema'] = NO_ARG if self.inherit_schema else False
         kw.setdefault("_adapted_from", self)
         return super().adapt(cls, **kw)
 
     def create(self, bind: _CreateDropBind, checkfirst: bool = False) -> None:
         """Issue CREATE DDL for this type, if applicable."""
-
-        t = self.dialect_impl(bind.dialect)
-        if isinstance(t, SchemaType) and t.__class__ is not self.__class__:
-            t.create(bind, checkfirst=checkfirst)
+        bind._run_ddl_visitor("create", self, checkfirst=checkfirst)
 
     def drop(self, bind: _CreateDropBind, checkfirst: bool = False) -> None:
         """Issue DROP DDL for this type, if applicable."""
-
-        t = self.dialect_impl(bind.dialect)
-        if isinstance(t, SchemaType) and t.__class__ is not self.__class__:
-            t.drop(bind, checkfirst=checkfirst)
-
-    def _on_table_create(
-        self, target: Any, bind: _CreateDropBind, **kw: Any
-    ) -> None:
-        if not self._is_impl_for_variant(bind.dialect, kw):
-            return
-
-        t = self.dialect_impl(bind.dialect)
-        if isinstance(t, SchemaType) and t.__class__ is not self.__class__:
-            t._on_table_create(target, bind, **kw)
-
-    def _on_table_drop(
-        self, target: Any, bind: _CreateDropBind, **kw: Any
-    ) -> None:
-        if not self._is_impl_for_variant(bind.dialect, kw):
-            return
-
-        t = self.dialect_impl(bind.dialect)
-        if isinstance(t, SchemaType) and t.__class__ is not self.__class__:
-            t._on_table_drop(target, bind, **kw)
-
-    def _on_metadata_create(
-        self, target: Any, bind: _CreateDropBind, **kw: Any
-    ) -> None:
-        if not self._is_impl_for_variant(bind.dialect, kw):
-            return
-
-        t = self.dialect_impl(bind.dialect)
-        if isinstance(t, SchemaType) and t.__class__ is not self.__class__:
-            t._on_metadata_create(target, bind, **kw)
-
-    def _on_metadata_drop(
-        self, target: Any, bind: _CreateDropBind, **kw: Any
-    ) -> None:
-        if not self._is_impl_for_variant(bind.dialect, kw):
-            return
-
-        t = self.dialect_impl(bind.dialect)
-        if isinstance(t, SchemaType) and t.__class__ is not self.__class__:
-            t._on_metadata_drop(target, bind, **kw)
+        bind._run_ddl_visitor("drop", self, checkfirst=checkfirst)
 
     def _is_impl_for_variant(
         self, dialect: Dialect, kw: Dict[str, Any]
@@ -1574,7 +1588,7 @@ class Enum(String, SchemaType, Emulated, TypeEngine[Union[str, enum.Enum]]):
             schema=kw.pop("schema", None),
             metadata=kw.pop("metadata", None),
             quote=kw.pop("quote", None),
-            _create_events=kw.pop("_create_events", True),
+            create_type=kw.pop('create_type', True),
             _adapted_from=kw.pop("_adapted_from", None),
         )
 
@@ -1811,7 +1825,6 @@ class Enum(String, SchemaType, Emulated, TypeEngine[Union[str, enum.Enum]]):
     def adapt_to_emulated(self, impltype, **kw):
         self._make_enum_kw(kw)
         kw["_disable_warnings"] = True
-        kw.setdefault("_create_events", False)
         assert "_enums" in kw
         return impltype(**kw)
 
@@ -2020,7 +2033,6 @@ class Boolean(SchemaType, Emulated, TypeEngine[bool]):
         self,
         create_constraint: bool = False,
         name: Optional[str] = None,
-        _create_events: bool = True,
         _adapted_from: Optional[SchemaType] = None,
     ):
         """Construct a Boolean.
@@ -2046,15 +2058,14 @@ class Boolean(SchemaType, Emulated, TypeEngine[bool]):
         """
         self.create_constraint = create_constraint
         self.name = name
-        self._create_events = _create_events
+        self.schema = None
         if _adapted_from:
             self.dispatch = self.dispatch._join(_adapted_from.dispatch)
 
     def copy(self, **kw):
         # override SchemaType.copy() to not include to_metadata logic
         return self.adapt(
-            cast("Type[TypeEngine[Any]]", self.__class__),
-            _create_events=True,
+            cast("Type[TypeEngine[Any]]", self.__class__)
         )
 
     def _should_create_constraint(self, compiler, **kw):

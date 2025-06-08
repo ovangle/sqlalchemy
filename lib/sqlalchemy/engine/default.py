@@ -65,6 +65,8 @@ from ..sql.base import _NoArg
 from ..sql.compiler import DDLCompiler
 from ..sql.compiler import InsertmanyvaluesSentinelOpts
 from ..sql.compiler import SQLCompiler
+from ..sql.ddl import SchemaDropper
+from ..sql.ddl import SchemaGenerator
 from ..sql.elements import quoted_name
 from ..util.typing import Literal
 from ..util.typing import TupleAny
@@ -125,6 +127,9 @@ class DefaultDialect(Dialect):
     statement_compiler = compiler.SQLCompiler
     ddl_compiler = compiler.DDLCompiler
     type_compiler_cls = compiler.GenericTypeCompiler
+
+    ddl_generator = SchemaGenerator
+    ddl_dropper = SchemaDropper
 
     preparer = compiler.IdentifierPreparer
     supports_alter = True

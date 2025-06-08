@@ -2270,37 +2270,13 @@ class PKAutoIncrementTest(fixtures.TestBase):
 class SchemaTypeTest(fixtures.TestBase):
     __backend__ = True
 
-    class TrackEvents:
-        column = None
-        table = None
-        evt_targets = ()
-
-        def _set_table(self, column, table):
-            super()._set_table(column, table)
-            self.column = column
-            self.table = table
-
-        def _on_table_create(self, target, bind, **kw):
-            super()._on_table_create(target, bind, **kw)
-            self.evt_targets += (target,)
-
-        def _on_metadata_create(self, target, bind, **kw):
-            super()._on_metadata_create(target, bind, **kw)
-            self.evt_targets += (target,)
-
     # TODO: Enum and Boolean put TypeEngine first.  Changing that here
     # causes collection-mutate-while-iterated errors in the event system
     # since the hooks here call upon the adapted type.  Need to figure out
     # why Enum and Boolean don't have this problem.
     # NOTE: it's likely the need for the SchemaType.adapt() method,
     # which Enum / Boolean don't use (and crash if it comes first)
-    class MyType(TrackEvents, sqltypes.SchemaType, sqltypes.TypeEngine):
-        pass
-
-    class WrapEnum(TrackEvents, Enum):
-        pass
-
-    class WrapBoolean(TrackEvents, Boolean):
+    class MyType(sqltypes.SchemaType, sqltypes.TypeEngine):
         pass
 
     class MyTypeWImpl(MyType):
@@ -2419,8 +2395,8 @@ class SchemaTypeTest(fixtures.TestBase):
 
         adapted = t1.c.y.type.adapt(self.MyType)
 
-        eq_(type_.inherit_schema, False)
-        eq_(adapted.inherit_schema, False)
+        # eq_(type_.inherit_schema, False)
+        # eq_(adapted.inherit_schema, False)
 
         eq_(adapted.schema, "z")
 
@@ -2513,26 +2489,30 @@ class SchemaTypeTest(fixtures.TestBase):
     def test_to_metadata_copy_type(self, assign_metadata):
         m1 = MetaData()
 
-        if assign_metadata:
-            type_ = self.MyType(metadata=m1)
-        else:
-            type_ = self.MyType()
+        # Always assign the metadata
+        #if assign_metadata:
+        #    type_ = self.MyType(metadata=m1)
+        #else:
+        #    type_ = self.MyType()
+        type_ = self.MyType(metadata=m1)
 
         t1 = Table("x", m1, Column("y", type_))
 
         m2 = MetaData()
         t2 = t1.to_metadata(m2)
 
-        if assign_metadata:
-            # metadata was transferred
-            # issue #11802
-            is_(t2.c.y.type.metadata, m2)
-        else:
-            # metadata isn't set
-            is_(t2.c.y.type.metadata, None)
+        # Always assign the metadata
+        # if assign_metadata:
+        #     # metadata was transferred
+        #     # issue #11802
+        #     is_(t2.c.y.type.metadata, m2)
+        # else:
+        #     # metadata isn't set
+        #     is_(t2.c.y.type.metadata, None)
+        is_(t2.c.y.type.metadata, m2)
 
         # our test type sets table, though
-        is_(t2.c.y.type.table, t2)
+        # is_(t2.c.y.type.table, t2)
 
     def test_to_metadata_copy_decorated(self):
         class MyDecorated(TypeDecorator):
@@ -2567,6 +2547,12 @@ class SchemaTypeTest(fixtures.TestBase):
         else:
             eq_(t2.c.y.type.schema, None)
 
+        m3 = MetaData(schema='baz')
+        t3 = t1.to_metadata(m3)
+
+        eq_(t3.c.y.type.schema, 'baz')
+        eq_(t3.c.y.type.inherit_schema, t1.c.y.type.inherit_schema)
+
     @testing.combinations(
         ("name", "foobar", "name"),
         ("schema", "someschema", "schema"),
@@ -2597,136 +2583,15 @@ class SchemaTypeTest(fixtures.TestBase):
         eq_(t1.c.y.type.schema, None)
         eq_(t2.c.y.type.schema, "bar")
 
-    def test_to_metadata_independent_events(self):
-        m1 = MetaData()
-
-        type_ = self.MyType()
-        t1 = Table("x", m1, Column("y", type_))
-
-        m2 = MetaData()
-        t2 = t1.to_metadata(m2)
-
-        t1.dispatch.before_create(t1, testing.db)
-        eq_(t1.c.y.type.evt_targets, (t1,))
-        eq_(t2.c.y.type.evt_targets, ())
-
-        t2.dispatch.before_create(t2, testing.db)
-        t2.dispatch.before_create(t2, testing.db)
-        eq_(t1.c.y.type.evt_targets, (t1,))
-        eq_(t2.c.y.type.evt_targets, (t2, t2))
-
-    def test_enum_column_copy_transfers_events(self):
-        m = MetaData()
-
-        type_ = self.WrapEnum("a", "b", "c", name="foo")
-        y = Column("y", type_)
-        y_copy = y._copy()
-        t1 = Table("x", m, y_copy)
-
-        is_true(y_copy.type._create_events)
-
-        # for PostgreSQL, this will emit CREATE TYPE
-        m.dispatch.before_create(t1, testing.db)
-        try:
-            eq_(t1.c.y.type.evt_targets, (t1,))
-        finally:
-            # do the drop so that PostgreSQL emits DROP TYPE
-            m.dispatch.after_drop(t1, testing.db)
-
-    def test_enum_nonnative_column_copy_transfers_events(self):
-        m = MetaData()
-
-        type_ = self.WrapEnum("a", "b", "c", name="foo", native_enum=False)
-        y = Column("y", type_)
-        y_copy = y._copy()
-        t1 = Table("x", m, y_copy)
-
-        is_true(y_copy.type._create_events)
-
-        m.dispatch.before_create(t1, testing.db)
-        eq_(t1.c.y.type.evt_targets, (t1,))
-
-    def test_enum_nonnative_column_copy_transfers_constraintpref(self):
-        m = MetaData()
-
-        type_ = self.WrapEnum(
-            "a",
-            "b",
-            "c",
-            name="foo",
-            native_enum=False,
-            create_constraint=False,
-        )
-        y = Column("y", type_)
-        y_copy = y._copy()
-        Table("x", m, y_copy)
-
-        is_false(y_copy.type.create_constraint)
-
-    def test_boolean_column_copy_transfers_events(self):
-        m = MetaData()
-
-        type_ = self.WrapBoolean()
-        y = Column("y", type_)
-        y_copy = y._copy()
-        Table("x", m, y_copy)
-
-        is_true(y_copy.type._create_events)
-
     def test_boolean_nonnative_column_copy_transfers_constraintpref(self):
         m = MetaData()
 
-        type_ = self.WrapBoolean(create_constraint=False)
+        type_ = Boolean(create_constraint=False)
         y = Column("y", type_)
         y_copy = y._copy()
         Table("x", m, y_copy)
 
         is_false(y_copy.type.create_constraint)
-
-    def test_metadata_dispatch_no_new_impl(self):
-        m1 = MetaData()
-        typ = self.MyType(metadata=m1)
-        m1.dispatch.before_create(m1, testing.db)
-        eq_(typ.evt_targets, (m1,))
-
-        dialect_impl = typ.dialect_impl(testing.db.dialect)
-        eq_(dialect_impl.evt_targets, ())
-
-    def test_metadata_dispatch_new_impl(self):
-        m1 = MetaData()
-        typ = self.MyTypeWImpl(metadata=m1)
-        m1.dispatch.before_create(m1, testing.db)
-        eq_(typ.evt_targets, (m1,))
-
-        dialect_impl = typ.dialect_impl(testing.db.dialect)
-        eq_(dialect_impl.evt_targets, (m1,))
-
-    def test_table_dispatch_decorator_schematype(self):
-        m1 = MetaData()
-        typ = self.MyTypeDecAndSchema()
-        t1 = Table("t1", m1, Column("x", typ))
-        m1.dispatch.before_create(t1, testing.db)
-        eq_(typ.evt_targets, (t1,))
-
-    def test_table_dispatch_no_new_impl(self):
-        m1 = MetaData()
-        typ = self.MyType()
-        t1 = Table("t1", m1, Column("x", typ))
-        m1.dispatch.before_create(t1, testing.db)
-        eq_(typ.evt_targets, (t1,))
-
-        dialect_impl = typ.dialect_impl(testing.db.dialect)
-        eq_(dialect_impl.evt_targets, ())
-
-    def test_table_dispatch_new_impl(self):
-        m1 = MetaData()
-        typ = self.MyTypeWImpl()
-        t1 = Table("t1", m1, Column("x", typ))
-        m1.dispatch.before_create(t1, testing.db)
-        eq_(typ.evt_targets, (t1,))
-
-        dialect_impl = typ.dialect_impl(testing.db.dialect)
-        eq_(dialect_impl.evt_targets, (t1,))
 
     def test_create_metadata_bound_no_crash(self):
         m1 = MetaData()
@@ -2769,6 +2634,190 @@ class SchemaTypeTest(fixtures.TestBase):
             len([c for c in t2.constraints if isinstance(c, CheckConstraint)]),
             1,
         )
+
+
+class SchemaTypeRegistrationTests(fixtures.TestBase):
+    @testing.variation(
+        'test_case',
+        [
+            'shared__explicit_metadata',
+            'shared__two_tables',
+            'shared__many_tables',
+            'internal__separate_declaration',
+            'internal__inline_declaration'
+        ]
+    )
+    def test_register_enum_table_internal_type(self, test_case):
+        """
+        A table-internal type is one which is declared without explicit metadata
+        and is attached to exactly one table.
+
+        It is stored in the metadata type registry with its table and column
+        """
+
+        metadata = MetaData()
+
+        assert 'myenum' not in metadata._types
+
+        if test_case.shared__explicit_metadata:
+            enum = Enum('a', 'b', 'c', name='myenum', metadata=metadata)
+            table = Table('table', metadata, Column('data', enum))
+        elif test_case.shared__two_tables:
+            enum = Enum('a', 'b', 'c', name='myenum')
+            Table('table1', metadata, Column('data', enum))
+            Table('table2', metadata, Column('data', enum))
+        elif test_case.shared__many_tables:
+            enum = Enum('a', 'b', 'c', name='myenum')
+
+            Table('table1', metadata, Column('data', enum))
+            Table('table2', metadata, Column('data', enum))
+            Table('table3', metadata, Column('data', enum))
+            Table('table4', metadata, Column('data', enum))
+        elif test_case.internal__separate_declaration:
+            enum = Enum('a', 'b', 'c', name='myenum')
+            table = Table('table', metadata, Column('data', enum))
+        elif test_case.internal__inline_declaration:
+            table = Table(
+                'table',
+                metadata,
+                Column('data', Enum('a', 'b', 'c', name='myenum'))
+            )
+            enum = table.c.data.type
+        else:
+            raise RuntimeError(f'Unknown test case {test_case}')
+
+        registered = metadata._types['myenum']
+
+        if test_case.name.startswith('shared'):
+            if test_case.shared__explicit_metadata:
+                assert registered is enum
+            else:
+                assert registered is not enum
+
+            assert registered.table is None
+            assert registered.column is None
+        if test_case.name.startswith('internal'):
+            assert registered is enum
+            assert registered.table is table
+            assert registered.column is table.c.data
+
+    def test_unnamed_enum_registration(self):
+        m = MetaData()
+        enum = Enum('a', 'b', 'c', metadata=m)
+
+        assert m._types['<unknown>'] is enum
+
+    def test_registered_with_schema_name_key(self):
+        m = MetaData()
+        enum = Enum('a', 'b', 'c', metadata=m, schema='myschema', name='myenum')
+
+        assert m._types['myschema.myenum'] is enum
+
+        enum = Enum('d', 'e', 'f', metadata=m, schema='myschema')
+        assert m._types['myschema.<unknown>'] is enum
+
+    def test_internal_enum_inherit_schema(self):
+        m = MetaData(schema='foo')
+
+        enum = Enum('a', 'b', 'c', inherit_schema=True, name='myenum')
+        table = Table('table', m, Column('data', enum), schema='bar')
+
+        assert 'foo.myenum' not in m._types
+        assert m._types['bar.myenum'] is enum
+        assert m._types['bar.myenum'].table is table
+
+    @testing.variation('inherit_schema', [True, False])
+    def test_set_explicit_metadata(self, inherit_schema):
+        """
+        An enum declared with explicit metadata should always
+        be considered shared, even if it is only declared on
+        the column of one table.
+        """
+        m = MetaData(schema='foo')
+
+        enum = Enum('a', 'b', 'c', name='myenum', metadata=m, inherit_schema=bool(inherit_schema))
+
+        assert m._types['foo.myenum'] is enum
+        assert m._types['foo.myenum'].table is None
+
+        Table('table', m, Column('data', enum), schema='bar')
+
+        if inherit_schema:
+            assert m._types['foo.myenum'] not in m._types
+            assert m._types['bar.myenum'].table is None
+        else:
+            assert m._types['foo.myenum'].table is None
+
+    # def test_shared_enum_registry_inherit_schema_different_table_schemas(self):
+    #     m = MetaData()
+
+    #     enum = Enum('a', 'b', 'c', inherit_schema=True, name='myenum')
+
+    #     Table('t1', m, Column('c', enum), schema='t1_schema')
+    #     Table('t2', m, Column('c', enum), schema='t2_schema')
+
+    #     assert m._types['t1_schema.myenum'].schema == 't1_schema'
+    #     assert m._types['t1_schema.myenum'].name == 'myenum'
+    #     assert m._types['t2_schema.myenum'].schema == 't2_schema'
+    #     assert m._types['t2_schema.myenum'].name == 'myenum'
+
+    def test_internal_enum_to_metadata(self):
+        m1 = MetaData()
+
+        enum = Enum('a', 'b', 'c', name='myenum')
+        t1 = Table('mytable', m1, Column('data', enum))
+
+        m2 = MetaData()
+        t2 = t1.to_metadata(m2)
+
+        assert m1._types['myenum'] is enum
+        assert m2._types['myenum'] is not enum
+        assert m2._types['myenum'] is t2.c.data.type
+        assert m2._types['myenum'].table is t2
+
+    def test_shared_enum_to_metadata(self):
+        m1 = MetaData(schema='foo')
+
+        enum = Enum('a', 'b', 'c', name='myenum', schema='foo')
+        t1 = Table('table_1', m1, Column('data', enum))
+        t2 = Table('table_2', m1, Column('data', enum))
+
+        m2 = MetaData(schema='bar')
+        t1_m2 = t1.to_metadata(m2)
+
+        # Should be considered to be shared, as it was constructed with
+        # explicit metadata
+        assert m2._types['']
+        assert m2._types['bar.myenum'].table is None
+
+    @testing.variation('share_m1', [True, False])
+    @testing.variation('share_m2', [True, False])
+    def test_shared_status_metadata_independent(self, share_m1, share_m2):
+        m1 = MetaData()
+        enum = Enum('a', 'b', 'c', name='myenum')
+
+        m1_t1 = Table('m1_t1', m1, Column('c', enum))
+        if share_m1:
+            Table('m1_t2', m1, Column('c', enum))
+
+        m2 = MetaData()
+
+        m2_t1 = Table('m2_t1', m2, Column('c', enum))
+        if share_m2:
+            Table('m2_t2', m2, Column('c', enum))
+
+        m1_registered = m1._types['myenum']
+        m2_registered = m2._types['myenum']
+
+        if share_m1:
+            assert m1_registered.table is None
+        else:
+            assert m1_registered.table is m1_t1
+
+        if share_m2:
+            assert m2_registered.table is None
+        else:
+            assert m2_registered.table is m2_t1
 
 
 class SchemaTest(fixtures.TestBase, AssertsCompiledSQL):

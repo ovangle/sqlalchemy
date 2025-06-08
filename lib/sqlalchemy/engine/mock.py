@@ -9,11 +9,10 @@ from __future__ import annotations
 
 from operator import attrgetter
 import typing
-from typing import Any
+from typing import Any, Literal
 from typing import Callable
 from typing import cast
 from typing import Optional
-from typing import Type
 from typing import Union
 
 from . import url as _url
@@ -22,14 +21,14 @@ from .. import util
 
 if typing.TYPE_CHECKING:
     from .base import Engine
+    from .base import Connection
     from .interfaces import _CoreAnyExecuteParams
     from .interfaces import CoreExecuteOptionsParameter
     from .interfaces import Dialect
     from .url import URL
     from ..sql.base import Executable
-    from ..sql.ddl import InvokeDDLBase
     from ..sql.schema import HasSchemaAttr
-    from ..sql.visitors import Visitable
+    from ..sql.schema import SchemaVisitable
 
 
 class MockConnection:
@@ -52,14 +51,17 @@ class MockConnection:
 
     def _run_ddl_visitor(
         self,
-        visitorcallable: Type[InvokeDDLBase],
-        element: Visitable,
+        phase: Literal["create", "drop"],
+        element: SchemaVisitable,
         **kwargs: Any,
     ) -> None:
         kwargs["checkfirst"] = False
-        visitorcallable(
-            dialect=self.dialect, connection=self, **kwargs
-        ).traverse_single(element)
+        if phase == "create":
+            visitorcallable = self.dialect.ddl_generator
+        elif phase == "drop":
+            visitorcallable = self.dialect.ddl_dropper
+
+        visitorcallable(cast("Connection", self), element, **kwargs).invoke()
 
     def execute(
         self,

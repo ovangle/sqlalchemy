@@ -46,6 +46,7 @@ if typing.TYPE_CHECKING:
     from .schema import ForeignKeyConstraint
     from .schema import Index
     from .schema import SchemaItem
+    from .schema import SchemaVisitable
     from .schema import Sequence as Sequence  # noqa: F401
     from .schema import Table
     from .selectable import TableClause
@@ -867,9 +868,14 @@ class DropConstraintComment(_CreateDropBase["Constraint"]):
 
 
 class InvokeDDLBase(SchemaVisitor):
-    def __init__(self, connection, **kw):
+    def __init__(self, connection: Connection, target: SchemaItem, **kw: Any):
         self.connection = connection
+        self.dialect = connection.dialect
+        self.target = target
         assert not kw, f"Unexpected keywords: {kw.keys()}"
+
+    def invoke(self) -> None:
+        self.traverse_single(self.target)
 
     @contextlib.contextmanager
     def with_ddl_events(self, target, **kw):
@@ -911,13 +917,17 @@ class InvokeDropDDLBase(InvokeDDLBase):
 
 class SchemaGenerator(InvokeCreateDDLBase):
     def __init__(
-        self, dialect, connection, checkfirst=False, tables=None, **kwargs
+        self,
+        connection: Connection,
+        target: SchemaItem,
+        checkfirst=False,
+        tables=None,
+        **kwargs
     ):
-        super().__init__(connection, **kwargs)
+        super().__init__(connection, target, **kwargs)
         self.checkfirst = checkfirst
         self.tables = tables
-        self.preparer = dialect.identifier_preparer
-        self.dialect = dialect
+        self.preparer = self.dialect.identifier_preparer
         self.memo = {}
 
     def _can_create_table(self, table):
@@ -1065,13 +1075,17 @@ class SchemaGenerator(InvokeCreateDDLBase):
 
 class SchemaDropper(InvokeDropDDLBase):
     def __init__(
-        self, dialect, connection, checkfirst=False, tables=None, **kwargs
+        self,
+        connection: Connection,
+        target: SchemaVisitable,
+        checkfirst: bool = False,
+        tables: list[Table] = None,
+        **kwargs: Any
     ):
-        super().__init__(connection, **kwargs)
+        super().__init__(connection, target, **kwargs)
         self.checkfirst = checkfirst
         self.tables = tables
-        self.preparer = dialect.identifier_preparer
-        self.dialect = dialect
+        self.preparer = self.dialect.identifier_preparer
         self.memo = {}
 
     def visit_metadata(self, metadata):

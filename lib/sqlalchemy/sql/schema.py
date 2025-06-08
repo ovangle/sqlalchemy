@@ -104,6 +104,7 @@ if typing.TYPE_CHECKING:
     from .elements import BindParameter
     from .elements import KeyedColumnElement
     from .functions import Function
+    from .sqltypes import SchemaType
     from .type_api import TypeEngine
     from .visitors import anon_map
     from ..engine import Connection
@@ -1279,8 +1280,7 @@ class Table(
             :meth:`_schema.MetaData.create_all`.
 
         """
-
-        bind._run_ddl_visitor(ddl.SchemaGenerator, self, checkfirst=checkfirst)
+        bind._run_ddl_visitor("create", self, checkfirst=checkfirst)
 
     def drop(self, bind: _CreateDropBind, checkfirst: bool = False) -> None:
         """Issue a ``DROP`` statement for this
@@ -1292,7 +1292,7 @@ class Table(
             :meth:`_schema.MetaData.drop_all`.
 
         """
-        bind._run_ddl_visitor(ddl.SchemaDropper, self, checkfirst=checkfirst)
+        bind._run_ddl_visitor("drop", self, checkfirst=checkfirst)
 
     @util.deprecated(
         "1.4",
@@ -4032,13 +4032,11 @@ class Sequence(HasSchemaAttr, IdentityOptions, DefaultGenerator):
 
     def create(self, bind: _CreateDropBind, checkfirst: bool = True) -> None:
         """Creates this sequence in the database."""
-
-        bind._run_ddl_visitor(ddl.SchemaGenerator, self, checkfirst=checkfirst)
+        bind._run_ddl_visitor("create", self, checkfirst=checkfirst)
 
     def drop(self, bind: _CreateDropBind, checkfirst: bool = True) -> None:
         """Drops this sequence from the database."""
-
-        bind._run_ddl_visitor(ddl.SchemaDropper, self, checkfirst=checkfirst)
+        bind._run_ddl_visitor("drop", self, checkfirst=checkfirst)
 
     def _not_a_column_expr(self) -> NoReturn:
         raise exc.InvalidRequestError(
@@ -5410,7 +5408,7 @@ class Index(
             :meth:`_schema.MetaData.create_all`.
 
         """
-        bind._run_ddl_visitor(ddl.SchemaGenerator, self, checkfirst=checkfirst)
+        bind._run_ddl_visitor("create", self, checkfirst=checkfirst)
 
     def drop(self, bind: _CreateDropBind, checkfirst: bool = False) -> None:
         """Issue a ``DROP`` statement for this
@@ -5422,7 +5420,7 @@ class Index(
             :meth:`_schema.MetaData.drop_all`.
 
         """
-        bind._run_ddl_visitor(ddl.SchemaDropper, self, checkfirst=checkfirst)
+        bind._run_ddl_visitor("drop", self, checkfirst=checkfirst)
 
     def __repr__(self) -> str:
         exprs: _typing_Sequence[Any]  # noqa: F842
@@ -5622,6 +5620,7 @@ class MetaData(HasSchemaAttr):
         if info:
             self.info = info
         self._schemas: Set[str] = set()
+        self._types: dict[str, SchemaType] = {}
         self._sequences: Dict[str, Sequence] = {}
         self._fk_memos: Dict[Tuple[str, Optional[str]], List[ForeignKey]] = (
             collections.defaultdict(list)
@@ -5678,6 +5677,7 @@ class MetaData(HasSchemaAttr):
             "schema": self.schema,
             "schemas": self._schemas,
             "sequences": self._sequences,
+            "types": self._types,
             "fk_memos": self._fk_memos,
             "naming_convention": self.naming_convention,
         }
@@ -5687,6 +5687,7 @@ class MetaData(HasSchemaAttr):
         self.schema = state["schema"]
         self.naming_convention = state["naming_convention"]
         self._sequences = state["sequences"]
+        self._types = state["types"]
         self._schemas = state["schemas"]
         self._fk_memos = state["fk_memos"]
 
@@ -5987,7 +5988,7 @@ class MetaData(HasSchemaAttr):
 
         """
         bind._run_ddl_visitor(
-            ddl.SchemaGenerator, self, checkfirst=checkfirst, tables=tables
+            "create", self, checkfirst=checkfirst, tables=tables
         )
 
     def drop_all(
@@ -6015,7 +6016,7 @@ class MetaData(HasSchemaAttr):
 
         """
         bind._run_ddl_visitor(
-            ddl.SchemaDropper, self, checkfirst=checkfirst, tables=tables
+            "drop", self, checkfirst=checkfirst, tables=tables
         )
 
 

@@ -1,3 +1,4 @@
+import pytest
 from unittest.mock import Mock
 
 from sqlalchemy import Column
@@ -8,6 +9,9 @@ from sqlalchemy import MetaData
 from sqlalchemy import schema
 from sqlalchemy import Sequence
 from sqlalchemy import Table
+from sqlalchemy import testing
+from sqlalchemy.engine.default import DefaultDialect
+from sqlalchemy.engine.mock import MockConnection
 from sqlalchemy.sql.ddl import SchemaDropper
 from sqlalchemy.sql.ddl import SchemaGenerator
 from sqlalchemy.testing import fixtures
@@ -34,25 +38,25 @@ class EmitDDLTest(fixtures.TestBase):
         )
 
     def _mock_create_fixture(
-        self, checkfirst, tables, item_exists=lambda item: False
+        self, target, checkfirst, tables, item_exists=lambda item: False
     ):
         connection = self._mock_connection(item_exists)
 
         return SchemaGenerator(
-            connection.dialect,
             connection,
+            target,
             checkfirst=checkfirst,
             tables=tables,
         )
 
     def _mock_drop_fixture(
-        self, checkfirst, tables, item_exists=lambda item: True
+        self, target, checkfirst, tables, item_exists=lambda item: True
     ):
         connection = self._mock_connection(item_exists)
 
         return SchemaDropper(
-            connection.dialect,
             connection,
+            target,
             checkfirst=checkfirst,
             tables=tables,
         )
@@ -122,7 +126,7 @@ class EmitDDLTest(fixtures.TestBase):
         m, t1, c1 = self._table_comment_fixture()
 
         generator = self._mock_create_fixture(
-            False, [t1], item_exists=lambda t: t not in ("t1",)
+            m, False, [t1], item_exists=lambda t: t not in ("t1",)
         )
 
         self._assert_create_comment([t1, t1, c1], generator, m)
@@ -130,7 +134,7 @@ class EmitDDLTest(fixtures.TestBase):
     def test_create_seq_checkfirst(self):
         m, t1, t2, s1, s2 = self._table_seq_fixture()
         generator = self._mock_create_fixture(
-            True, [t1, t2], item_exists=lambda t: t not in ("t1", "s1")
+            m, True, [t1, t2], item_exists=lambda t: t not in ("t1", "s1")
         )
 
         self._assert_create([t1, s1], generator, m)
@@ -138,7 +142,7 @@ class EmitDDLTest(fixtures.TestBase):
     def test_drop_seq_checkfirst(self):
         m, t1, t2, s1, s2 = self._table_seq_fixture()
         generator = self._mock_drop_fixture(
-            True, [t1, t2], item_exists=lambda t: t in ("t1", "s1")
+            m, True, [t1, t2], item_exists=lambda t: t in ("t1", "s1")
         )
 
         self._assert_drop([t1, s1], generator, m)
@@ -155,7 +159,9 @@ class EmitDDLTest(fixtures.TestBase):
             else:
                 return False
 
-        generator = self._mock_create_fixture(True, [t1], item_exists=exists)
+        generator = self._mock_create_fixture(
+            m, True, [t1], item_exists=exists
+        )
         self._assert_create([t1, i1], generator, t1)
 
     def test_create_table_exists_index_checkfirst(self):
@@ -170,7 +176,9 @@ class EmitDDLTest(fixtures.TestBase):
             else:
                 return True
 
-        generator = self._mock_create_fixture(True, [t1], item_exists=exists)
+        generator = self._mock_create_fixture(
+            m, True, [t1], item_exists=exists
+        )
         # nothing is created
         self._assert_create([], generator, t1)
 
@@ -183,69 +191,69 @@ class EmitDDLTest(fixtures.TestBase):
             else:
                 return True
 
-        generator = self._mock_drop_fixture(True, [t1], item_exists=exists)
+        generator = self._mock_drop_fixture(m, True, [t1], item_exists=exists)
         self._assert_drop_tables([t1], generator, t1)
 
     def test_create_index_checkfirst_exists(self):
         m, t1, i1 = self._table_index_fixture()
         generator = self._mock_create_fixture(
-            True, [i1], item_exists=lambda idx: True
+            m, True, [i1], item_exists=lambda idx: True
         )
         self._assert_create_index([], generator, i1)
 
     def test_create_index_checkfirst_doesnt_exist(self):
         m, t1, i1 = self._table_index_fixture()
         generator = self._mock_create_fixture(
-            True, [i1], item_exists=lambda idx: False
+            m, True, [i1], item_exists=lambda idx: False
         )
         self._assert_create_index([i1], generator, i1)
 
     def test_create_index_nocheck_exists(self):
         m, t1, i1 = self._table_index_fixture()
         generator = self._mock_create_fixture(
-            False, [i1], item_exists=lambda idx: True
+            m, False, [i1], item_exists=lambda idx: True
         )
         self._assert_create_index([i1], generator, i1)
 
     def test_create_index_nocheck_doesnt_exist(self):
         m, t1, i1 = self._table_index_fixture()
         generator = self._mock_create_fixture(
-            False, [i1], item_exists=lambda idx: False
+            m, False, [i1], item_exists=lambda idx: False
         )
         self._assert_create_index([i1], generator, i1)
 
     def test_drop_index_checkfirst_exists(self):
         m, t1, i1 = self._table_index_fixture()
         generator = self._mock_drop_fixture(
-            True, [i1], item_exists=lambda idx: True
+            m, True, [i1], item_exists=lambda idx: True
         )
         self._assert_drop_index([i1], generator, i1)
 
     def test_drop_index_checkfirst_doesnt_exist(self):
         m, t1, i1 = self._table_index_fixture()
         generator = self._mock_drop_fixture(
-            True, [i1], item_exists=lambda idx: False
+            m, True, [i1], item_exists=lambda idx: False
         )
         self._assert_drop_index([], generator, i1)
 
     def test_drop_index_nocheck_exists(self):
         m, t1, i1 = self._table_index_fixture()
         generator = self._mock_drop_fixture(
-            False, [i1], item_exists=lambda idx: True
+            m, False, [i1], item_exists=lambda idx: True
         )
         self._assert_drop_index([i1], generator, i1)
 
     def test_drop_index_nocheck_doesnt_exist(self):
         m, t1, i1 = self._table_index_fixture()
         generator = self._mock_drop_fixture(
-            False, [i1], item_exists=lambda idx: False
+            m, False, [i1], item_exists=lambda idx: False
         )
         self._assert_drop_index([i1], generator, i1)
 
     def test_create_collection_checkfirst(self):
         m, t1, t2, t3, t4, t5 = self._table_fixture()
         generator = self._mock_create_fixture(
-            True, [t2, t3, t4], item_exists=lambda t: t not in ("t2", "t4")
+            m, True, [t2, t3, t4], item_exists=lambda t: t not in ("t2", "t4")
         )
 
         self._assert_create_tables([t2, t4], generator, m)
@@ -253,7 +261,7 @@ class EmitDDLTest(fixtures.TestBase):
     def test_drop_collection_checkfirst(self):
         m, t1, t2, t3, t4, t5 = self._table_fixture()
         generator = self._mock_drop_fixture(
-            True, [t2, t3, t4], item_exists=lambda t: t in ("t2", "t4")
+            m, True, [t2, t3, t4], item_exists=lambda t: t in ("t2", "t4")
         )
 
         self._assert_drop_tables([t2, t4], generator, m)
@@ -261,7 +269,7 @@ class EmitDDLTest(fixtures.TestBase):
     def test_create_collection_nocheck(self):
         m, t1, t2, t3, t4, t5 = self._table_fixture()
         generator = self._mock_create_fixture(
-            False, [t2, t3, t4], item_exists=lambda t: t not in ("t2", "t4")
+            m, False, [t2, t3, t4], item_exists=lambda t: t not in ("t2", "t4")
         )
 
         self._assert_create_tables([t2, t3, t4], generator, m)
@@ -269,7 +277,7 @@ class EmitDDLTest(fixtures.TestBase):
     def test_create_empty_collection(self):
         m, t1, t2, t3, t4, t5 = self._table_fixture()
         generator = self._mock_create_fixture(
-            True, [], item_exists=lambda t: t not in ("t2", "t4")
+            m, True, [], item_exists=lambda t: t not in ("t2", "t4")
         )
 
         self._assert_create_tables([], generator, m)
@@ -277,7 +285,7 @@ class EmitDDLTest(fixtures.TestBase):
     def test_drop_empty_collection(self):
         m, t1, t2, t3, t4, t5 = self._table_fixture()
         generator = self._mock_drop_fixture(
-            True, [], item_exists=lambda t: t in ("t2", "t4")
+            m, True, [], item_exists=lambda t: t in ("t2", "t4")
         )
 
         self._assert_drop_tables([], generator, m)
@@ -285,7 +293,7 @@ class EmitDDLTest(fixtures.TestBase):
     def test_drop_collection_nocheck(self):
         m, t1, t2, t3, t4, t5 = self._table_fixture()
         generator = self._mock_drop_fixture(
-            False, [t2, t3, t4], item_exists=lambda t: t in ("t2", "t4")
+            m, False, [t2, t3, t4], item_exists=lambda t: t in ("t2", "t4")
         )
 
         self._assert_drop_tables([t2, t3, t4], generator, m)
@@ -293,7 +301,7 @@ class EmitDDLTest(fixtures.TestBase):
     def test_create_metadata_checkfirst(self):
         m, t1, t2, t3, t4, t5 = self._table_fixture()
         generator = self._mock_create_fixture(
-            True, None, item_exists=lambda t: t not in ("t2", "t4")
+            m, True, None, item_exists=lambda t: t not in ("t2", "t4")
         )
 
         self._assert_create_tables([t2, t4], generator, m)
@@ -301,7 +309,7 @@ class EmitDDLTest(fixtures.TestBase):
     def test_drop_metadata_checkfirst(self):
         m, t1, t2, t3, t4, t5 = self._table_fixture()
         generator = self._mock_drop_fixture(
-            True, None, item_exists=lambda t: t in ("t2", "t4")
+            m, True, None, item_exists=lambda t: t in ("t2", "t4")
         )
 
         self._assert_drop_tables([t2, t4], generator, m)
@@ -309,7 +317,7 @@ class EmitDDLTest(fixtures.TestBase):
     def test_create_metadata_nocheck(self):
         m, t1, t2, t3, t4, t5 = self._table_fixture()
         generator = self._mock_create_fixture(
-            False, None, item_exists=lambda t: t not in ("t2", "t4")
+            m, False, None, item_exists=lambda t: t not in ("t2", "t4")
         )
 
         self._assert_create_tables([t1, t2, t3, t4, t5], generator, m)
@@ -317,14 +325,14 @@ class EmitDDLTest(fixtures.TestBase):
     def test_drop_metadata_nocheck(self):
         m, t1, t2, t3, t4, t5 = self._table_fixture()
         generator = self._mock_drop_fixture(
-            False, None, item_exists=lambda t: t in ("t2", "t4")
+            m, False, None, item_exists=lambda t: t in ("t2", "t4")
         )
 
         self._assert_drop_tables([t1, t2, t3, t4, t5], generator, m)
 
     def test_create_metadata_auto_alter_fk(self):
         m, t1, t2 = self._use_alter_fixture_one()
-        generator = self._mock_create_fixture(False, [t1, t2])
+        generator = self._mock_create_fixture(m, False, [t1, t2])
         self._assert_create_w_alter(
             [t1, t2]
             + list(t1.foreign_key_constraints)
@@ -335,7 +343,7 @@ class EmitDDLTest(fixtures.TestBase):
 
     def test_create_metadata_inline_fk(self):
         m, t1, t2 = self._fk_fixture_one()
-        generator = self._mock_create_fixture(False, [t1, t2])
+        generator = self._mock_create_fixture(m, False, [t1, t2])
         self._assert_create_w_alter(
             [t1, t2]
             + list(t1.foreign_key_constraints)
@@ -416,3 +424,101 @@ class EmitDDLTest(fixtures.TestBase):
                     if e not in set(c.include_foreign_key_constraints)
                 ]
         assert not elements, "elements remain in list: %r" % elements
+
+
+class ConfigureDDLGenerationTests(fixtures.TestBase):
+    @pytest.fixture()
+    def generated_items(self):
+        return []
+
+    @pytest.fixture()
+    def dropped_items(self):
+        return []
+
+    @pytest.fixture()
+    def dialect(self, generated_items, dropped_items):
+        class MyGenerator(SchemaGenerator):
+            def visit_table(self, table, **kwargs):
+                generated_items.append(("table", table.name))
+
+            def visit_index(self, index, **kwargs):
+                generated_items.append(("index", index.name))
+
+            def visit_sequence(self, seq, **kwargs):
+                generated_items.append(("sequence", seq.name))
+
+        class MyDropper(SchemaDropper):
+            def visit_table(self, table, **kwargs):
+                dropped_items.append(("table", table.name))
+
+            def visit_index(self, index, **kwargs):
+                dropped_items.append(("index", index.name))
+
+            def visit_sequence(self, seq, **kwargs):
+                dropped_items.append(("sequence", seq.name))
+
+        class Dialect(DefaultDialect):
+            ddl_generator = MyGenerator
+            ddl_dropper = MyDropper
+
+        return Dialect()
+
+    @pytest.fixture()
+    def connection(self, dialect):
+        return MockConnection(dialect, lambda _: None)
+
+    def test_metadata_create_all_uses_configured_generator(
+        self, connection, generated_items
+    ):
+        metadata = MetaData()
+
+        Table("t1", metadata, Column("pk", Integer()))
+        Table("t2", metadata, Column("pk", Integer()))
+
+        metadata.create_all(connection)
+        assert generated_items == [("table", "t1"), ("table", "t2")]
+
+    def test_metadata_drop_all_uses_dialect_configured_dropper(
+        self, connection, dropped_items
+    ):
+        metadata = MetaData()
+
+        Table("t1", metadata, Column("pk", Integer()))
+        Table("t2", metadata, Column("pk", Integer()))
+
+        metadata.drop_all(connection)
+        assert dropped_items == [("table", "t2"), ("table", "t1")]
+
+    @testing.combinations(
+        ("table", "t1", lambda m: Table("t1", m, Column("pk", Integer()))),
+        ("sequence", "s1", lambda m: Sequence("s1", metadata=m)),
+        ("index", "i1", lambda m: Index("i1")),
+        argnames="item_type,item_name,mk_item",
+    )
+    def test_schema_item_uses_dialect_configured_generator(
+        self, connection, generated_items, item_type, item_name, mk_item
+    ):
+        assert generated_items == []
+
+        metadata = MetaData()
+        item = mk_item(metadata)
+
+        item.create(connection)
+        assert generated_items == [(item_type, item_name)]
+
+    @testing.combinations(
+        ("table", "t1", lambda m: Table("t1", m, Column("pk", Integer()))),
+        ("sequence", "s1", lambda m: Sequence("s1", metadata=m)),
+        ("index", "i1", lambda m: Index("i1")),
+        argnames="item_type,item_name,mk_item",
+    )
+    def test_schema_item_uses_dialect_configured_dropper(
+        self, connection, dropped_items, item_type, item_name, mk_item
+    ):
+        assert dropped_items == []
+
+        metadata = MetaData()
+        item = mk_item(metadata)
+
+        item.drop(connection)
+        assert dropped_items == [(item_type, item_name)]

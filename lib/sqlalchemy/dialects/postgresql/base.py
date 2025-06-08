@@ -1563,6 +1563,8 @@ from .named_types import DropDomainType as DropDomainType  # noqa: F401
 from .named_types import DropEnumType as DropEnumType  # noqa: F401
 from .named_types import ENUM as ENUM  # noqa: F401
 from .named_types import NamedType as NamedType  # noqa: F401
+from .named_types import PGDDLGenerator
+from .named_types import PGDDLDropper
 from .types import _DECIMAL_TYPES  # noqa: F401
 from .types import _FLOAT_TYPES  # noqa: F401
 from .types import _INT_TYPES  # noqa: F401
@@ -3156,6 +3158,8 @@ class PGDialect(default.DefaultDialect):
 
     statement_compiler = PGCompiler
     ddl_compiler = PGDDLCompiler
+    ddl_generator = PGDDLGenerator
+    ddl_dropper = PGDDLDropper
     type_compiler_cls = PGTypeCompiler
     preparer = PGIdentifierPreparer
     execution_ctx_cls = PGExecutionContext
